@@ -13,6 +13,7 @@
  ***************************************************************************/
 
 #include "sropthck.h"
+#include <cstdlib>
 #include "sroptdrf.h"
 #include "gminterp.h"
 
@@ -563,6 +564,98 @@ void srTMirror::FindElemExtentsAlongOptAxes(gmTrans& trfMir, TVector3d& vCenNorm
 }
 
 //*************************************************************************
+// Exact-sphere treatment of the strongly oscillating wavefront term, local to
+// the thick-element re-interpolation (hz-b, fix/thick-mirror-exact-sphere).
+//
+// WfrInterpolOnOrigGrid2 removes the wavefront's curvature before it
+// interpolates the ray-traced field bilinearly onto the grid, and adds it back
+// afterwards. The generic TreatStronglyOscillatingTerm* remove only the
+// paraxial term pi (x^2/Rx + z^2/Rz) / lambda. For a short focusing element
+// with a large aperture the rest is not small: the quartic term
+// k r^4 / (8 R^3) of an ellipsoid with q = 0.2 m and r = 25 mm is ~1500 rad at
+// 50 eV, changing by several radians from one grid point to the next, and the
+// bilinear interpolation then mixes values of unrelated phase - the focus of
+// such a mirror came out 1.5-4.5 times its diffraction limit. Removing the
+// exact sphere k sign(R) (sqrt(R^2 + x^2 + z^2) - |R|) instead leaves a smooth
+// residual. Used only when Rx and Rz agree (a sphere is then the right
+// reference), coordinate and frequency representation; otherwise the caller
+// keeps the paraxial path. SRW_THICK_PARAXIAL=1 in the environment restores
+// the old behaviour, for comparison.
+
+static bool ThickExactSphereApplicable(srTSRWRadStructAccessData& wfr)
+{
+	const char* sEnv = getenv("SRW_THICK_PARAXIAL");
+	if((sEnv != 0) && (sEnv[0] == '1')) return false;
+	if((wfr.Pres != 0) || (wfr.PresT != 0)) return false;
+	if(!(wfr.WfrQuadTermCanBeTreatedAtResizeX && wfr.WfrQuadTermCanBeTreatedAtResizeZ)) return false;
+	double Rx = wfr.RobsX, Rz = wfr.RobsZ;
+	if((Rx == 0.) || (Rz == 0.)) return false;
+	double absRx = fabs(Rx), absRz = fabs(Rz);
+	if(((Rx > 0.) != (Rz > 0.)) || (fabs(absRx - absRz) > 1.e-03*(absRx > absRz? absRx : absRz))) return false;
+	return true;
+}
+
+static void ThickExactSphereTerm(srTSRWRadStructAccessData& wfr, double* arRayTrCoord, double xMin, double xMax, double zMin, double zMax, char AddOrRem)
+{//arRayTrCoord == 0: the regular grid of wfr; otherwise the ray-traced (irregular) coordinates, laid out like the field
+	double R = 0.5*(wfr.RobsX + wfr.RobsZ);
+	double absR = fabs(R), sgnR = (R > 0.)? 1. : -1.;
+	if(AddOrRem == 'r') sgnR = -sgnR;
+
+	float *pEX0 = wfr.pBaseRadX, *pEZ0 = wfr.pBaseRadZ;
+	long long PerX = wfr.ne << 1;
+	long long PerZ = PerX*wfr.nx;
+
+	const double relStepTol = 1.E-03;
+	double xLo = xMin - relStepTol*fabs(wfr.xStep), xHi = xMax + relStepTol*fabs(wfr.xStep);
+	double zLo = zMin - relStepTol*fabs(wfr.zStep), zHi = zMax + relStepTol*fabs(wfr.zStep);
+
+	double ePh = wfr.eStart;
+	for(long ie=0; ie<wfr.ne; ie++)
+	{
+		double k = ePh*5.067730652e+06; //2 pi / lambda [1/m], ePh in eV (as in PropagateRadiationSimple_LocRayTracing)
+		long long Two_ie = ie << 1;
+		double z = wfr.zStart;
+		for(long iz=0; iz<wfr.nz; iz++)
+		{
+			long long izPerZ = iz*PerZ;
+			double x = wfr.xStart;
+			for(long ix=0; ix<wfr.nx; ix++)
+			{
+				long long ofst = izPerZ + ix*PerX + Two_ie;
+				double xr = x, zr = z;
+				bool use = true;
+				if(arRayTrCoord != 0)
+				{
+					xr = arRayTrCoord[ofst]; zr = arRayTrCoord[ofst + 1];
+					use = (xLo <= xr) && (xr <= xHi) && (zLo <= zr) && (zr <= zHi);
+				}
+				if(use)
+				{
+					double dx = xr - wfr.xc, dz = zr - wfr.zc;
+					double Phase = sgnR*k*(sqrt(absR*absR + dx*dx + dz*dz) - absR);
+					double CosPh = cos(Phase), SinPh = sin(Phase);
+					if(pEX0 != 0)
+					{
+						float *pRe = pEX0 + ofst, *pIm = pRe + 1;
+						double re = (*pRe)*CosPh - (*pIm)*SinPh, im = (*pRe)*SinPh + (*pIm)*CosPh;
+						*pRe = (float)re; *pIm = (float)im;
+					}
+					if(pEZ0 != 0)
+					{
+						float *pRe = pEZ0 + ofst, *pIm = pRe + 1;
+						double re = (*pRe)*CosPh - (*pIm)*SinPh, im = (*pRe)*SinPh + (*pIm)*CosPh;
+						*pRe = (float)re; *pIm = (float)im;
+					}
+				}
+				x += wfr.xStep;
+			}
+			z += wfr.zStep;
+		}
+		ePh += wfr.eStep;
+	}
+}
+
+//*************************************************************************
 
 int srTMirror::WfrInterpolOnOrigGrid2(srTSRWRadStructAccessData* pWfr, double* arRayTrCoord, long long* arIndRayTrCoord, float* arEX, float* arEZ, double xMin, double xMax, double zMin, double zMax, double dxMax, double dzMax) //OC20082018
 //int srTMirror::WfrInterpolOnOrigGrid2(srTSRWRadStructAccessData* pWfr, double* arRayTrCoord, long long* arIndRayTrCoord, float* arEX, float* arEZ, double xMin, double xMax, double zMin, double zMax)
@@ -585,7 +678,8 @@ int srTMirror::WfrInterpolOnOrigGrid2(srTSRWRadStructAccessData* pWfr, double* a
 		//if(!((fabs(pWfr->RobsX + 0.99) < 0.1) && (fabs(pWfr->RobsZ + 0.99) < 0.1)))
 		//{//OCTEST
 		
-		TreatStronglyOscillatingTermIrregMesh(*pWfr, arRayTrCoord, xMin, xMax, zMin, zMax, 'r');
+		if(ThickExactSphereApplicable(*pWfr)) ThickExactSphereTerm(*pWfr, arRayTrCoord, xMin, xMax, zMin, zMax, 'r'); //hz-b: exact sphere, see above
+		else TreatStronglyOscillatingTermIrregMesh(*pWfr, arRayTrCoord, xMin, xMax, zMin, zMax, 'r');
 		
 		//}//OCTEST
 		
@@ -1340,7 +1434,11 @@ int srTMirror::WfrInterpolOnOrigGrid2(srTSRWRadStructAccessData* pWfr, double* a
 	//if(fabs(pWfr->RobsZ + 18.079) > 0.1)
 	//{//OCTEST
 
-	if(waveFrontTermWasTreated) TreatStronglyOscillatingTerm(*pWfr, 'a');
+	if(waveFrontTermWasTreated)
+	{
+		if(ThickExactSphereApplicable(*pWfr)) ThickExactSphereTerm(*pWfr, 0, 0., 0., 0., 0., 'a'); //hz-b: the same exact sphere back, on the regular grid
+		else TreatStronglyOscillatingTerm(*pWfr, 'a');
+	}
 
 	//}//OCTEST
 	return 0;
