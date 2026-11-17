@@ -2103,7 +2103,12 @@ void srTMirror::RadPointModifier_ThinElem(srTEXZ& EXZ, srTEFieldPtrs& EPtrs)
 	TVector3d inP(EXZ.x, EXZ.z, -m_extAlongOptAxIn), intersP;
 	inP = TransHndl.rep->TrPoint_inv(inP); //Point in input transverse plane in local frame
 
-	if(!FindRayIntersectWithSurfInLocFrame(inP, m_vInLoc, intersP)) 
+	//The surface normal at the intersection point comes from the intersection itself, as in
+	//PropagateRadiationSimple_LocRayTracing: FindSurfNormalInLocFrame is not overridden by
+	//every mirror type (srTMirrorPlane leaves it at 0), and a zero normal made the reflectivity
+	//table be read at angle 0 and the sigma/pi frame fall back to x/y.
+	TVector3d vNormLoc(0., 0., 0.);
+	if(!FindRayIntersectWithSurfInLocFrame(inP, m_vInLoc, intersP, &vNormLoc)) 
 	{
 		*(EPtrs.pExIm) = 0.; *(EPtrs.pExRe) = 0.; *(EPtrs.pEzIm) = 0.; *(EPtrs.pEzRe) = 0.;
 		return;
@@ -2135,8 +2140,8 @@ void srTMirror::RadPointModifier_ThinElem(srTEXZ& EXZ, srTEFieldPtrs& EPtrs)
 	}
 
 	//Calculate change of the electric field due to reflectivity...
-	TVector3d vNormAtP;
-	FindSurfNormalInLocFrame(intersP.x, intersP.y, vNormAtP);
+	TVector3d vNormAtP = vNormLoc;
+	if(vNormAtP.isZero()) FindSurfNormalInLocFrame(intersP.x, intersP.y, vNormAtP);
 	vNormAtP = TransHndl.rep->TrBiPoint(vNormAtP);  //to the frame of incident beam
 
 	//double xp = (EXZ.x - m_inWfrCh)/m_inWfrRh, yp = (EXZ.z - m_inWfrCv)/m_inWfrRv;
@@ -2173,23 +2178,30 @@ void srTMirror::RadPointModifier_ThinElem(srTEXZ& EXZ, srTEFieldPtrs& EPtrs)
 	double newEpiRe = -cosPh*(EpiIm*RpiIm - EpiRe*RpiRe) - sinPh*(EpiRe*RpiIm + EpiIm*RpiRe);
 	double newEpiIm = cosPh*(EpiRe*RpiIm + EpiIm*RpiRe) - sinPh*(EpiIm*RpiIm - EpiRe*RpiRe);
 
-	//vEr = newEsigRe*vSig + newEpiRe*vPi; //in the frame of incident beam
-	//vEi = newEsigIm*vSig + newEpiIm*vPi;
-	double vErX = newEsigRe*vSigX + newEpiRe*vPiX; //in the frame of incident beam
-	double vErY = newEsigRe*vSigY + newEpiRe*vPiY;
-	double vEiX = newEsigIm*vSigX + newEpiIm*vPiX;
-	double vEiY = newEsigIm*vSigY + newEpiIm*vPiY;
+	//The reflected pi component points along pi' = k' x sigma, k' the reflected ray, not
+	//along the incident pi = k x sigma: pi' is transverse to the output beam, pi is tilted
+	//against it by the deflection angle. Projecting the incident pi onto the output axes
+	//(as before) multiplied the pi field by cos(2 theta) - a loss of 1 - cos^2(2 theta) of the
+	//pi power even for Rsig = Rpi = 1, where the branch without reflectivity loses nothing.
+	//With pi' (and sigma, which is transverse to both rays), Rsig = Rpi = 1 reproduces that
+	//branch. Sign: pi = k x sigma and pi' = k' x sigma as in Born & Wolf, so Rsig = Rpi keeps
+	//the polarization at grazing incidence, as before.
+	TVector3d vSig(vSigX, vSigY, 0.), vPiOut(vPiX, vPiY, 0.); //in the frame of incident beam
+	if((vNormAtP.x != 0.) || (vNormAtP.y != 0.))
+	{
+		TVector3d vRay(0., 0., 1.), vNorm = vNormAtP;
+		vNorm.Normalize();
+		TVector3d vRayOut = vRay - (2.*(vRay*vNorm))*vNorm;
+		vPiOut = vRayOut^vSig;
+	}
+	TVector3d vEr = newEsigRe*vSig + newEpiRe*vPiOut; //in the frame of incident beam
+	TVector3d vEi = newEsigIm*vSig + newEpiIm*vPiOut;
 
-	//electric field components in the frame of output beam 
-	//test
-	//*(EPtrs.pExRe) = (float)(vEr*m_vHorOutIn);
-	//*(EPtrs.pExIm) = (float)(vEi*m_vHorOutIn);
-	//*(EPtrs.pEzRe) = (float)(vEr*m_vVerOutIn);
-	//*(EPtrs.pEzIm) = (float)(vEi*m_vVerOutIn);
-	*(EPtrs.pExRe) = (float)(vErX*m_vHorOutIn.x + vErY*m_vHorOutIn.y);
-	*(EPtrs.pExIm) = (float)(vEiX*m_vHorOutIn.x + vEiY*m_vHorOutIn.y);
-	*(EPtrs.pEzRe) = (float)(vErX*m_vVerOutIn.x + vErY*m_vVerOutIn.y);
-	*(EPtrs.pEzIm) = (float)(vEiX*m_vVerOutIn.x + vEiY*m_vVerOutIn.y);
+	//electric field components in the frame of output beam
+	*(EPtrs.pExRe) = (float)(vEr*m_vHorOutIn);
+	*(EPtrs.pExIm) = (float)(vEi*m_vHorOutIn);
+	*(EPtrs.pEzRe) = (float)(vEr*m_vVerOutIn);
+	*(EPtrs.pEzIm) = (float)(vEi*m_vVerOutIn);
 }
 
 //*************************************************************************
@@ -2817,10 +2829,14 @@ int srTMirror::PropagateRadiationSimple_LocRayTracing(srTSRWRadStructAccessData*
 									vRayIn.Normalize();
 									vSig = (-1)*(vRayIn^vSurfNormLocFr); //sigma unit vector in Local frame; check sign
 									double grazAng = 1.5707963268;
+									//pi' = k' x sigma of the reflected (diffracted) ray rayLocFrV, transverse to the
+									//output beam; see srTMirror::RadPointModifier_ThinElem
+									TVector3d vPiOut;
 									if(vSig.isZero())
 									{//In the frame of incident beam
 										vSig.x = 1.; vSig.y = 0.; vSig.z = 0.;
 										vPi.x = 0.; vPi.y = 1.; vPi.z = 0.;
+										vPiOut = vPi;
 									}
 									else
 									{
@@ -2829,10 +2845,12 @@ int srTMirror::PropagateRadiationSimple_LocRayTracing(srTSRWRadStructAccessData*
 
 										vSig.Normalize();
 										vPi = vRayIn^vSig;
+										vPiOut = rayLocFrV^vSig;
 										if(pTrans != 0)
 										{//to the frame of incident beam
 											vSig = pTrans->TrBiPoint(vSig);
 											vPi = pTrans->TrBiPoint(vPi);
+											vPiOut = pTrans->TrBiPoint(vPiOut);
 										}
 									}
 
@@ -2868,26 +2886,20 @@ int srTMirror::PropagateRadiationSimple_LocRayTracing(srTSRWRadStructAccessData*
 									//double newEpiRe = -(EpiIm*RpiIm - EpiRe*RpiRe);
 									//double newEpiIm = EpiRe*RpiIm + EpiIm*RpiRe;
 
-									//In the frame of incident beam:
-									double vErX = newEsigRe*vSig.x + newEpiRe*vPi.x;
-									double vErY = newEsigRe*vSig.y + newEpiRe*vPi.y;
-									double vEiX = newEsigIm*vSig.x + newEpiIm*vPi.x;
-									double vEiY = newEsigIm*vSig.y + newEpiIm*vPi.y;
+									//In the frame of incident beam (the reflected pi along pi', not the incident pi):
+									TVector3d vEr = newEsigRe*vSig + newEpiRe*vPiOut;
+									TVector3d vEi = newEsigIm*vSig + newEpiIm*vPiOut;
 
 									//In the frame of output beam:
 									if(pEX0 != 0)
 									{
-										//*pExRe = (float)(vErX*m_vHorOutIn.x + vErY*m_vHorOutIn.y);
-										//*pExIm = (float)(vEiX*m_vHorOutIn.x + vEiY*m_vHorOutIn.y);
-										*pExReRes = (float)(ampFact*(vErX*m_vHorOutIn.x + vErY*m_vHorOutIn.y));
-										*pExImRes = (float)(ampFact*(vEiX*m_vHorOutIn.x + vEiY*m_vHorOutIn.y));
+										*pExReRes = (float)(ampFact*(vEr*m_vHorOutIn));
+										*pExImRes = (float)(ampFact*(vEi*m_vHorOutIn));
 									}
 									if(pEZ0 != 0)
 									{
-										//*pEzRe = (float)(vErX*m_vVerOutIn.x + vErY*m_vVerOutIn.y);
-										//*pEzIm = (float)(vEiX*m_vVerOutIn.x + vEiY*m_vVerOutIn.y);
-										*pEyReRes = (float)(ampFact*(vErX*m_vVerOutIn.x + vErY*m_vVerOutIn.y));
-										*pEyImRes = (float)(ampFact*(vEiX*m_vVerOutIn.x + vEiY*m_vVerOutIn.y));
+										*pEyReRes = (float)(ampFact*(vEr*m_vVerOutIn));
+										*pEyImRes = (float)(ampFact*(vEi*m_vVerOutIn));
 									}
 
 									//OCTEST!!!!!!!!!!!!!!!!!!!!!
@@ -3180,11 +3192,16 @@ void srTMirror::RadPointModifier_FourierByParts(srTEXZ& EXZ, srTEFieldPtrs& EPtr
 	double newEpiRe = -cosPh*(EpiIm*RpiIm - EpiRe*RpiRe) - sinPh*(EpiRe*RpiIm + EpiIm*RpiRe);
 	double newEpiIm = cosPh*(EpiRe*RpiIm + EpiIm*RpiRe) - sinPh*(EpiIm*RpiIm - EpiRe*RpiRe);
 
-	vEr = newEsigRe*vSig + newEpiRe*vPi; //in the frame of incident beam
-	vEi = newEsigIm*vSig + newEpiIm*vPi;
+	//The reflected pi along pi' = k' x sigma, transverse to the output beam (see
+	//RadPointModifier_ThinElem): the incident pi projected onto the output axes gave the pi
+	//field a factor cos(2 theta) also for Rsig = Rpi = 1.
+	TVector3d vNorm = vNormAtP; vNorm.Normalize();
+	TVector3d vRayOut = vRay - (2.*(vRay*vNorm))*vNorm;
+	TVector3d vPiOut = vRayOut^vSig;
+	vEr = newEsigRe*vSig + newEpiRe*vPiOut; //in the frame of incident beam
+	vEi = newEsigIm*vSig + newEpiIm*vPiOut;
 
 	//electric field components in the frame of output beam 
-	//test
 	*(EPtrs.pExRe) = (float)(vEr*m_vHorOutIn);
 	*(EPtrs.pExIm) = (float)(vEi*m_vHorOutIn);
 	*(EPtrs.pEzRe) = (float)(vEr*m_vVerOutIn);
