@@ -272,8 +272,8 @@ int SRWLIB_Example01(const char* strFolder)
 
 	//**********************Input Parameters:
 	char strExampleFolderName[] = "data_example_01"; //example sub-folder name
-	//char *arFldInFileNames[] = {"epu49term1.dat", "epu49cen.dat", "epu49term2.dat"}; //3D Magnetic Field data file names
-	char *arFldInFileNames[] = {"epu49HEtot.dat"}; //3D Magnetic Field data file names
+	//const char *arFldInFileNames[] = {"epu49term1.dat", "epu49cen.dat", "epu49term2.dat"}; //3D Magnetic Field data file names
+	const char *arFldInFileNames[] = {"epu49HEtot.dat"}; //3D Magnetic Field data file names
 	char strTrajOutFileName[] = "ex01_res_traj.dat"; //file name for output trajectory data
 
 	int numPer = 40; //Number of ID Periods
@@ -487,7 +487,8 @@ int SRWLIB_Example02(const char* strFolder)
 	SRWLMagFldC magFldCnt;
 	void *vArMagFld[] = {(void*)(&und), (void*)(&qf), (void*)(&und), (void*)(&qd), (void*)(&und), (void*)(&qf), (void*)(&und), (void*)(&qd), (void*)(&und)};
 	magFldCnt.arMagFld = vArMagFld; //array of pointers to magnetic field elements
-	magFldCnt.arMagFldTypes = "umumumumu"; //types of magnetic field elements in arMagFld array
+	char arMagFldTypes[] = "umumumumu";
+	magFldCnt.arMagFldTypes = arMagFldTypes; //types of magnetic field elements in arMagFld array
 	magFldCnt.arXc = arZero; //horizontal center positions of magnetic field elements in arMagFld array
 	magFldCnt.arYc = arZero; //vertical center positions of magnetic field elements in arMagFld array
 	magFldCnt.arZc = arZcen; //longitudinal center positions of magnetic field elements in arMagFld array
@@ -581,7 +582,8 @@ int SRWLIB_Example03(const char* strFolder)
 	SRWLMagFldC magFldCnt;
 	void *vArMagFld[] = {(void*)(&und)};
 	magFldCnt.arMagFld = vArMagFld; //array of pointers to magnetic field elements
-	magFldCnt.arMagFldTypes = "u"; //types of magnetic field elements in arMagFld array
+	char arMagFldTypes[] = "u";
+	magFldCnt.arMagFldTypes = arMagFldTypes; //types of magnetic field elements in arMagFld array
 	double auxArXcID[] = {xcID};
 	double auxArYcID[] = {ycID};
 	double auxArZcID[] = {zcID};
@@ -761,7 +763,8 @@ int SRWLIB_Example04(const char* strFolder)
 	SRWLMagFldC magFldCnt;
 	void *vArMagFld[] = {(void*)(&und)};
 	magFldCnt.arMagFld = vArMagFld; //array of pointers to magnetic field elements
-	magFldCnt.arMagFldTypes = "u"; //types of magnetic field elements in arMagFld array
+	char arMagFldTypes[] = "u";
+	magFldCnt.arMagFldTypes = arMagFldTypes; //types of magnetic field elements in arMagFld array
 	double auxArXcID[] = {xcID};
 	double auxArYcID[] = {ycID};
 	double auxArZcID[] = {zcID};
@@ -849,7 +852,9 @@ int SRWLIB_Example04(const char* strFolder)
 	SRWLOptC optBL; //Beamline (container)
 	void *arOptEl[] = {(void*)(&optLens), (void*)(&optDrift)};
 	optBL.arOpt = arOptEl; //array of pointers to optical elements
-	char *arOptElT[] = {"lens", "drift"};
+	char arOptElTLens[] = "lens";
+	char arOptElTDrift[] = "drift";
+	char *arOptElT[] = {arOptElTLens, arOptElTDrift};
 	optBL.arOptTypes = arOptElT; //array of types of optical elements (C strings) in arOpt array
 	optBL.nElem = 2; //number of magnetic field elements in arMagFld array
 	optBL.arProp = arPropPar; //array of arrays of propagation parameters to be used for individual optical elements
@@ -955,7 +960,8 @@ int SRWLIB_Example05(const char* strFolder)
 	SRWLMagFldC magFldCnt; //Container
 	void *vArMagFld[] = {(void*)(&magFld3D)};
 	magFldCnt.arMagFld = vArMagFld; //array of pointers to magnetic field elements
-	magFldCnt.arMagFldTypes = "a"; //types of magnetic field elements in arMagFld array
+	char arMagFldTypes[] = "a";
+	magFldCnt.arMagFldTypes = arMagFldTypes; //types of magnetic field elements in arMagFld array
 	double auxArXcID[] = {xcID};
 	double auxArYcID[] = {ycID};
 	double auxArZcID[] = {zcID};
