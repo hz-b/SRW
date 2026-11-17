@@ -39,7 +39,11 @@ endif()
 
 # Setup definitions for all targets
 add_definitions(${SRW_DEFINITIONS})
-add_compile_options(-O3 -mfma) #HG01082025
+add_compile_options(-O3) #HG01082025
+# -mfma is an x86 option; clang for arm64 (Apple Silicon) rejects it.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i[3-6]86)$")
+    add_compile_options(-mfma)
+endif()
 
 #ext
 #auxgpu
